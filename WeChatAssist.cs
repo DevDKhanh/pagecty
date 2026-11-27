@@ -358,7 +358,7 @@ class WeChatAssist
     }
 
     // ================== Ctrl+Alt+C trong WeChat: dịch ô soạn tin ==================
-    public void TranslateInput(IntPtr hwnd, string chinesePrompt)
+    public void TranslateInput(IntPtr hwnd, string prompt, string langName)
     {
         string exe = HotkeyHost.FindClaude();
         if (exe == null) { host.Balloon("Không tìm thấy Claude Code (claude.exe).", ToolTipIcon.Error); return; }
@@ -380,14 +380,14 @@ class WeChatAssist
                 string original = vp.Current.Value ?? "";
                 if (original.Trim().Length == 0)
                 {
-                    host.Balloon("Ô soạn tin đang trống. Gõ tin tiếng Việt trước rồi bấm Ctrl+Alt+C.", ToolTipIcon.Info);
+                    host.Balloon("Ô soạn tin đang trống. Gõ tin tiếng Việt trước rồi bấm Ctrl+Alt+C (Trung) hoặc Ctrl+Alt+T (Thái).", ToolTipIcon.Info);
                     return;
                 }
                 Rectangle ir = ToRect(input.Current.BoundingRectangle);
-                SetStatus(ir, "Đang dịch sang tiếng Trung…", true, 120);
+                SetStatus(ir, "Đang dịch sang " + langName + "…", true, 120);
 
                 string result, error;
-                host.RunClaude(exe, HotkeyHost.Model, chinesePrompt, original, out result, out error);
+                host.RunClaude(exe, HotkeyHost.Model, prompt, original, out result, out error);
                 if (error != null)
                 {
                     SetStatus(ir, "Lỗi khi dịch – tin chưa bị thay đổi.", false, 5);
@@ -413,7 +413,7 @@ class WeChatAssist
                     host.Log("wechat input setvalue mismatch");
                     return;
                 }
-                SetStatus(ir, "✓ Đã dịch sang tiếng Trung – kiểm tra rồi bấm Enter để gửi.", false, 4);
+                SetStatus(ir, "✓ Đã dịch sang " + langName + " – kiểm tra rồi bấm Enter để gửi.", false, 4);
                 host.Log("wechat input translated len=" + original.Length + "->" + result.Length);
             }
             catch (Exception ex)
@@ -477,10 +477,11 @@ class WeChatAssist
         return Math.Max(Math.Abs(a.R - b.R), Math.Max(Math.Abs(a.G - b.G), Math.Abs(a.B - b.B)));
     }
 
+    // Tin cần dịch: có chữ Trung hoặc chữ Thái.
     static bool HasCjk(string s)
     {
         foreach (char c in s)
-            if ((c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF)) return true;
+            if ((c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF) || (c >= 0x0E00 && c <= 0x0E7F)) return true;
         return false;
     }
 

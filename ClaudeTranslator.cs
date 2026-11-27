@@ -56,6 +56,9 @@ class HotkeyHost : Form
         "You are a professional translator. Translate the user's text into natural, fluent Vietnamese." + CommonRules);
     static readonly Lang Chinese = new Lang("Tiếng Trung",
         "You are a professional translator. Translate the user's text into natural, fluent Simplified Chinese (简体中文)." + CommonRules);
+    static readonly Lang Thai = new Lang("Tiếng Thái",
+        "You are a professional translator. Translate the user's text into natural, fluent Thai (ภาษาไทย), using a polite conversational tone." +
+        " Never write alternatives separated by slashes (such as ครับ/ค่ะ or ผม/ฉัน); pick one natural form." + CommonRules);
 
     // ---- Win32 ----
     [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -70,7 +73,7 @@ class HotkeyHost : Form
     const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_NOREPEAT = 0x4000;
     const int VK_CONTROL = 0x11, VK_MENU = 0x12, VK_SHIFT = 0x10, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
     const uint KEYEVENTF_KEYUP = 0x2;
-    const int ID_VI = 1, ID_ZH = 2, ID_REPLACE = 3;
+    const int ID_VI = 1, ID_ZH = 2, ID_REPLACE = 3, ID_TH = 4;
 
     NotifyIcon tray;
     string workDir;
@@ -91,6 +94,7 @@ class HotkeyHost : Form
         var menu = new ContextMenuStrip();
         menu.Items.Add("Dịch sang Tiếng Việt   (Ctrl+Alt+V)", null, delegate { Translate(Vietnamese); });
         menu.Items.Add("Dịch sang Tiếng Trung  (Ctrl+Alt+C)", null, delegate { Translate(Chinese); });
+        menu.Items.Add("Dịch sang Tiếng Thái   (Ctrl+Alt+T)", null, delegate { Translate(Thai); });
         menu.Items.Add("Thay bản dịch vào chỗ chọn  (Ctrl+Alt+Enter)", null, delegate { QuickReplace(); });
         var wcItem = new ToolStripMenuItem("Tự dịch tin nhắn WeChat");
         wcItem.Checked = true;
@@ -106,7 +110,7 @@ class HotkeyHost : Form
 
         tray = new NotifyIcon();
         tray.Icon = MakeIcon();
-        tray.Text = "ClaudeTranslator: Ctrl+Alt+V/C dịch, Ctrl+Alt+Enter thay";
+        tray.Text = "ClaudeTranslator: Ctrl+Alt+V/C/T dịch, Ctrl+Alt+Enter thay";
         tray.ContextMenuStrip = menu;
         tray.Visible = true;
     }
@@ -124,6 +128,8 @@ class HotkeyHost : Form
         if (!RegisterHotKey(Handle, ID_VI, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.V)) failed.Append("Ctrl+Alt+V ");
         if (!RegisterHotKey(Handle, ID_ZH, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.C)) failed.Append("Ctrl+Alt+C ");
         if (!RegisterHotKey(Handle, ID_REPLACE, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.Return)) failed.Append("Ctrl+Alt+Enter ");
+        if (!RegisterHotKey(Handle, ID_TH, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.T)) failed.Append("Ctrl+Alt+T ");
+        Log("hotkeys registered" + (failed.Length > 0 ? ", FAILED: " + failed : " ok"));
 
         string exe = FindClaude();
         if (failed.Length > 0)
@@ -145,6 +151,7 @@ class HotkeyHost : Form
             if (id == ID_VI) Translate(Vietnamese);
             else if (id == ID_ZH) Translate(Chinese);
             else if (id == ID_REPLACE) QuickReplace();
+            else if (id == ID_TH) Translate(Thai);
             return;
         }
         base.WndProc(ref m);
@@ -155,6 +162,7 @@ class HotkeyHost : Form
         UnregisterHotKey(Handle, ID_VI);
         UnregisterHotKey(Handle, ID_ZH);
         UnregisterHotKey(Handle, ID_REPLACE);
+        UnregisterHotKey(Handle, ID_TH);
         if (wechat != null) wechat.Stop();
         tray.Visible = false;
         base.OnFormClosed(e);
@@ -175,7 +183,7 @@ class HotkeyHost : Form
     // ---- Lấy đoạn chữ đang bôi đen ----
     void WaitForKeysReleased()
     {
-        int[] keys = { VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN, (int)Keys.V, (int)Keys.C, (int)Keys.Return };
+        int[] keys = { VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN, (int)Keys.V, (int)Keys.C, (int)Keys.T, (int)Keys.Return };
         var sw = Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < 1500 && keys.Any(k => (GetAsyncKeyState(k) & 0x8000) != 0))
             Thread.Sleep(15);
@@ -268,12 +276,12 @@ class HotkeyHost : Form
     {
         IntPtr source = GetForegroundWindow();
 
-        // Trong WeChat: Ctrl+Alt+C dịch thẳng ô soạn tin, không cần bôi đen.
-        if (lang == Chinese && wechat != null && WeChatAssist.IsWeChatWindow(source))
+        // Trong WeChat: Ctrl+Alt+C / Ctrl+Alt+T dịch thẳng ô soạn tin, không cần bôi đen.
+        if ((lang == Chinese || lang == Thai) && wechat != null && WeChatAssist.IsWeChatWindow(source))
         {
             WaitForKeysReleased();
-            Log("hotkey wechat-input fg=" + source);
-            wechat.TranslateInput(source, Chinese.Prompt);
+            Log("hotkey wechat-input " + lang.Name + " fg=" + source);
+            wechat.TranslateInput(source, lang.Prompt, lang.Name.ToLower());
             return;
         }
 
