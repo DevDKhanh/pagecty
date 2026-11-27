@@ -58,7 +58,8 @@ class HotkeyHost : Form
         "You are a professional translator. Translate the user's text into natural, fluent Simplified Chinese (简体中文)." + CommonRules);
     static readonly Lang Thai = new Lang("Tiếng Thái",
         "You are a professional translator. Translate the user's text into natural, fluent Thai (ภาษาไทย), using a polite conversational tone." +
-        " Never write alternatives separated by slashes (such as ครับ/ค่ะ or ผม/ฉัน); pick one natural form." + CommonRules);
+        " The speaker is MALE: use ผม for 'I' and the polite particle ครับ where natural." +
+        " Never write alternatives separated by slashes (such as ครับ/ค่ะ or ผม/ฉัน)." + CommonRules);
 
     // ---- Win32 ----
     [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
