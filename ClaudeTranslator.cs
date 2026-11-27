@@ -44,7 +44,7 @@ class Lang
 class HotkeyHost : Form
 {
     // ---- Cấu hình ----
-    const string Model = "sonnet";         // "sonnet" dịch hay; đổi "haiku" nếu muốn nhanh hơn
+    public const string Model = "sonnet";         // "sonnet" dịch hay; đổi "haiku" nếu muốn nhanh hơn
     const int TimeoutSeconds = 120;
 
     const string CommonRules =
@@ -75,6 +75,7 @@ class HotkeyHost : Form
     NotifyIcon tray;
     string workDir;
     ResultPopup popup;
+    WeChatAssist wechat;
 
     public HotkeyHost()
     {
@@ -91,6 +92,15 @@ class HotkeyHost : Form
         menu.Items.Add("Dịch sang Tiếng Việt   (Ctrl+Alt+V)", null, delegate { Translate(Vietnamese); });
         menu.Items.Add("Dịch sang Tiếng Trung  (Ctrl+Alt+C)", null, delegate { Translate(Chinese); });
         menu.Items.Add("Thay bản dịch vào chỗ chọn  (Ctrl+Alt+Enter)", null, delegate { QuickReplace(); });
+        var wcItem = new ToolStripMenuItem("Tự dịch tin nhắn WeChat");
+        wcItem.Checked = true;
+        wcItem.Click += delegate
+        {
+            wcItem.Checked = !wcItem.Checked;
+            if (wechat != null) wechat.Enabled = wcItem.Checked;
+        };
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(wcItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Thoát", null, delegate { tray.Visible = false; Application.Exit(); });
 
@@ -122,6 +132,9 @@ class HotkeyHost : Form
             Balloon("Không tìm thấy Claude Code (claude.exe). Hãy mở app Claude desktop một lần.", ToolTipIcon.Error);
         else
             Balloon("Bôi đen chữ rồi bấm Ctrl+Alt+V (Việt) hoặc Ctrl+Alt+C (Trung).", ToolTipIcon.Info);
+
+        try { wechat = new WeChatAssist(this, Path.GetDirectoryName(workDir)); }
+        catch (Exception ex) { Log("wechat init: " + ex.Message); }
     }
 
     protected override void WndProc(ref Message m)
@@ -142,13 +155,21 @@ class HotkeyHost : Form
         UnregisterHotKey(Handle, ID_VI);
         UnregisterHotKey(Handle, ID_ZH);
         UnregisterHotKey(Handle, ID_REPLACE);
+        if (wechat != null) wechat.Stop();
         tray.Visible = false;
         base.OnFormClosed(e);
     }
 
-    void Balloon(string text, ToolTipIcon icon)
+    public void Balloon(string text, ToolTipIcon icon)
     {
+        if (InvokeRequired) { BeginInvoke((MethodInvoker)delegate { Balloon(text, icon); }); return; }
         tray.ShowBalloonTip(4000, "ClaudeTranslator", text, icon);
+    }
+
+    public static void ClipboardFromAnyThread(Control ui, string text)
+    {
+        if (ui.InvokeRequired) ui.Invoke((MethodInvoker)delegate { SetClipboard(text); });
+        else SetClipboard(text);
     }
 
     // ---- Lấy đoạn chữ đang bôi đen ----
@@ -230,9 +251,11 @@ class HotkeyHost : Form
             Balloon("Không quay lại được cửa sổ gốc. Bản dịch đã ở trong clipboard, bấm Ctrl+V để dán.", ToolTipIcon.Warning);
     }
 
-    void Log(string msg)
+    static readonly object logLock = new object();
+
+    public void Log(string msg)
     {
-        try
+        lock (logLock) try
         {
             string f = Path.Combine(Path.GetDirectoryName(workDir), "log.txt");
             if (File.Exists(f) && new FileInfo(f).Length > 200000) File.Delete(f);
@@ -244,6 +267,16 @@ class HotkeyHost : Form
     void Translate(Lang lang)
     {
         IntPtr source = GetForegroundWindow();
+
+        // Trong WeChat: Ctrl+Alt+C dịch thẳng ô soạn tin, không cần bôi đen.
+        if (lang == Chinese && wechat != null && WeChatAssist.IsWeChatWindow(source))
+        {
+            WaitForKeysReleased();
+            Log("hotkey wechat-input fg=" + source);
+            wechat.TranslateInput(source, Chinese.Prompt);
+            return;
+        }
+
         string text = CopySelection();
         Log("hotkey " + lang.Name + " fg=" + source + " popup=" + (popup != null && !popup.IsDisposed ? popup.Handle.ToString() : "-") +
             " copied=" + (text == null ? "null" : text.Length.ToString()));
@@ -291,11 +324,16 @@ class HotkeyHost : Form
 
     void RunClaude(string exe, string systemPrompt, string text, out string result, out string error)
     {
+        RunClaude(exe, Model, systemPrompt, text, out result, out error);
+    }
+
+    public void RunClaude(string exe, string model, string systemPrompt, string text, out string result, out string error)
+    {
         result = null; error = null;
         try
         {
             var psi = new ProcessStartInfo(exe);
-            psi.Arguments = "-p --model " + Model +
+            psi.Arguments = "-p --model " + model +
                 " --tools= --strict-mcp-config --setting-sources=user --no-session-persistence" +
                 " --exclude-dynamic-system-prompt-sections" +
                 " --system-prompt \"" + systemPrompt.Replace("\"", "'") + "\"";
@@ -339,7 +377,7 @@ class HotkeyHost : Form
     }
 
     // Tìm claude.exe: biến môi trường CLAUDE_EXE, PATH, rồi bản đi kèm app Claude desktop (mới nhất).
-    static string FindClaude()
+    public static string FindClaude()
     {
         string env = Environment.GetEnvironmentVariable("CLAUDE_EXE");
         if (!string.IsNullOrEmpty(env) && File.Exists(env)) return env;
