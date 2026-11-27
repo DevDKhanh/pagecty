@@ -64,12 +64,13 @@ class HotkeyHost : Form
     [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr hWnd);
 
     const int WM_HOTKEY = 0x0312;
     const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_NOREPEAT = 0x4000;
     const int VK_CONTROL = 0x11, VK_MENU = 0x12, VK_SHIFT = 0x10, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
     const uint KEYEVENTF_KEYUP = 0x2;
-    const int ID_VI = 1, ID_ZH = 2;
+    const int ID_VI = 1, ID_ZH = 2, ID_REPLACE = 3;
 
     NotifyIcon tray;
     string workDir;
@@ -89,12 +90,13 @@ class HotkeyHost : Form
         var menu = new ContextMenuStrip();
         menu.Items.Add("Dịch sang Tiếng Việt   (Ctrl+Alt+V)", null, delegate { Translate(Vietnamese); });
         menu.Items.Add("Dịch sang Tiếng Trung  (Ctrl+Alt+C)", null, delegate { Translate(Chinese); });
+        menu.Items.Add("Thay bản dịch vào chỗ chọn  (Ctrl+Alt+Enter)", null, delegate { QuickReplace(); });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Thoát", null, delegate { tray.Visible = false; Application.Exit(); });
 
         tray = new NotifyIcon();
         tray.Icon = MakeIcon();
-        tray.Text = "ClaudeTranslator  (Ctrl+Alt+V / Ctrl+Alt+C)";
+        tray.Text = "ClaudeTranslator: Ctrl+Alt+V/C dịch, Ctrl+Alt+Enter thay";
         tray.ContextMenuStrip = menu;
         tray.Visible = true;
     }
@@ -111,6 +113,7 @@ class HotkeyHost : Form
         var failed = new StringBuilder();
         if (!RegisterHotKey(Handle, ID_VI, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.V)) failed.Append("Ctrl+Alt+V ");
         if (!RegisterHotKey(Handle, ID_ZH, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.C)) failed.Append("Ctrl+Alt+C ");
+        if (!RegisterHotKey(Handle, ID_REPLACE, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, (uint)Keys.Return)) failed.Append("Ctrl+Alt+Enter ");
 
         string exe = FindClaude();
         if (failed.Length > 0)
@@ -128,6 +131,7 @@ class HotkeyHost : Form
             int id = m.WParam.ToInt32();
             if (id == ID_VI) Translate(Vietnamese);
             else if (id == ID_ZH) Translate(Chinese);
+            else if (id == ID_REPLACE) QuickReplace();
             return;
         }
         base.WndProc(ref m);
@@ -137,6 +141,7 @@ class HotkeyHost : Form
     {
         UnregisterHotKey(Handle, ID_VI);
         UnregisterHotKey(Handle, ID_ZH);
+        UnregisterHotKey(Handle, ID_REPLACE);
         tray.Visible = false;
         base.OnFormClosed(e);
     }
@@ -149,7 +154,7 @@ class HotkeyHost : Form
     // ---- Lấy đoạn chữ đang bôi đen ----
     void WaitForKeysReleased()
     {
-        int[] keys = { VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN, (int)Keys.V, (int)Keys.C };
+        int[] keys = { VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN, (int)Keys.V, (int)Keys.C, (int)Keys.Return };
         var sw = Stopwatch.StartNew();
         while (sw.ElapsedMilliseconds < 1500 && keys.Any(k => (GetAsyncKeyState(k) & 0x8000) != 0))
             Thread.Sleep(15);
@@ -189,14 +194,42 @@ class HotkeyHost : Form
         }
     }
 
-    public static void PasteInto(IntPtr hwnd)
+    // Chỉ dán khi chắc chắn cửa sổ đích đang ở trước, để không bao giờ dán nhầm sang app khác.
+    public static bool PasteInto(IntPtr hwnd)
     {
-        SetForegroundWindow(hwnd);
-        Thread.Sleep(150);
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return false;
+        var sw = Stopwatch.StartNew();
+        while (GetForegroundWindow() != hwnd && sw.ElapsedMilliseconds < 600)
+        {
+            SetForegroundWindow(hwnd);
+            Thread.Sleep(50);
+        }
+        if (GetForegroundWindow() != hwnd) return false;
+        Thread.Sleep(100);
         SendCtrl(Keys.V);
+        return true;
     }
 
     // ---- Dịch ----
+    // Ctrl+Alt+Enter: dán bản dịch mới nhất đè lên đoạn đang chọn ở cửa sổ đang làm việc.
+    void QuickReplace()
+    {
+        if (popup == null || popup.IsDisposed || !popup.HasResult)
+        {
+            Balloon("Chưa có bản dịch để thay (đang dịch hoặc chưa dịch gì).", ToolTipIcon.Info);
+            return;
+        }
+        // Luôn dán vào cửa sổ chứa đoạn chữ gốc, kể cả khi cửa sổ khác (vd. app chat) vừa nhảy lên trước.
+        IntPtr target = popup.SourceWindow;
+        string text = popup.ResultText;
+        Log("replace fg=" + target + " len=" + text.Length);
+        WaitForKeysReleased();
+        SetClipboard(text);
+        popup.Close();
+        if (!PasteInto(target))
+            Balloon("Không quay lại được cửa sổ gốc. Bản dịch đã ở trong clipboard, bấm Ctrl+V để dán.", ToolTipIcon.Warning);
+    }
+
     void Log(string msg)
     {
         try
@@ -361,6 +394,8 @@ class ResultPopup : Form
     protected override bool ShowWithoutActivation { get { return true; } }
 
     public IntPtr SourceWindow { get { return source; } }
+    public bool HasResult { get { return replaceBtn.Enabled; } }
+    public string ResultText { get { return box.Text; } }
     public int CurrentRequest { get { return requestCounter; } }
 
     // Bắt đầu một lần dịch mới trong cùng ô: đổi tiêu đề, xoá kết quả cũ.
@@ -406,7 +441,7 @@ class ResultPopup : Form
 
         var closeBtn = new Button { Text = "Đóng (Esc)", AutoSize = true };
         closeBtn.Click += delegate { Close(); };
-        replaceBtn = new Button { Text = "Thay vào chỗ đã chọn", AutoSize = true, Enabled = false };
+        replaceBtn = new Button { Text = "Thay vào chỗ chọn (Ctrl+Alt+Enter)", AutoSize = true, Enabled = false };
         replaceBtn.Click += delegate
         {
             HotkeyHost.SetClipboard(box.Text);

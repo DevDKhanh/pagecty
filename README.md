@@ -6,6 +6,7 @@
 |---|---|
 | `Ctrl+Alt+V` | Tiếng Việt |
 | `Ctrl+Alt+C` | Tiếng Trung (giản thể) |
+| `Ctrl+Alt+Enter` | Thay bản dịch mới nhất vào đoạn đã bôi đen |
 
 - Kết quả hiện trong **một ô duy nhất** gần con trỏ chuột; mỗi lần bấm chỉ cập nhật lại ô đó và không lấy mất focus của cửa sổ đang làm việc.
 - Bản dịch được tự chép vào clipboard. Nút **Thay vào chỗ đã chọn** dán đè lên đoạn gốc.
