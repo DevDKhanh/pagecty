@@ -48,6 +48,7 @@ class WeChatAssist
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
 
     readonly HotkeyHost host;
@@ -187,6 +188,10 @@ class WeChatAssist
             Rectangle r = ToRect(it.Cached.BoundingRectangle);
             if (r.Bottom <= lr.Top + 4 || r.Top >= lr.Bottom - 4 || r.Width < 2 * AvatarZone + 40) continue;
 
+            // Chỉ dịch tin của người khác (bong bóng bên trái); bỏ qua tin của mình.
+            BubbleInfo b = GetBubble(text, r, lr);
+            if (b == null || !b.Valid || !b.Incoming) continue;
+
             string tr;
             bool have, isPending;
             lock (sync)
@@ -199,9 +204,6 @@ class WeChatAssist
                     need.Add(text);
             }
             if (have && Normalize(tr) == Normalize(text)) continue;
-
-            BubbleInfo b = GetBubble(text, r, lr);
-            if (b == null || !b.Valid) continue;
 
             var lab = Layout(r, b, have ? tr : "đang dịch…");
             lab.Clip = lr;
@@ -257,7 +259,8 @@ class WeChatAssist
         BubbleInfo b;
         lock (sync) { if (bubbles.TryGetValue(key, out b)) return b; }
 
-        // Chỉ đo khi cả dòng tin đang hiện trọn trên màn hình.
+        // Chỉ đo khi WeChat đang ở trên cùng (không bị cửa sổ khác che) và cả dòng tin hiện trọn.
+        if (GetForegroundWindow() != wcHwnd) return null;
         if (r.Top < lr.Top || r.Bottom > lr.Bottom) return null;
 
         b = new BubbleInfo();
@@ -265,6 +268,7 @@ class WeChatAssist
         {
             using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(r.Left, r.Top, 0, 0, bmp.Size);
             Color bg = bmp.GetPixel(4, r.Height / 2);
+            if (Diff(bg, bmp.GetPixel(r.Width - 4, r.Height / 2)) > 6) return null;  // nền hai mép khác nhau: có gì đó che
             int minX = int.MaxValue, maxX = -1;
             foreach (double fy in new[] { 0.3, 0.5, 0.7 })
             {
@@ -279,7 +283,17 @@ class WeChatAssist
                     if (Diff(bmp.GetPixel(cx, y), bg) > 6) { top = y; break; }
                 b.Valid = true;
                 b.MinX = minX; b.MaxX = maxX; b.Top = top;
-                b.Incoming = (minX - AvatarZone) <= (r.Width - AvatarZone - maxX);
+                // Ảnh đại diện bên trái = tin người khác, bên phải = tin của mình.
+                int leftAv = 0, rightAv = 0;
+                foreach (double fy in new[] { 0.25, 0.4 })
+                {
+                    int y = (int)(r.Height * fy);
+                    for (int x = 20; x < AvatarZone - 5; x++) if (Diff(bmp.GetPixel(x, y), bg) > 12) leftAv++;
+                    for (int x = r.Width - AvatarZone + 5; x < r.Width - 20; x++) if (Diff(bmp.GetPixel(x, y), bg) > 12) rightAv++;
+                }
+                if (leftAv > rightAv + 20) b.Incoming = true;
+                else if (rightAv > leftAv + 20) b.Incoming = false;
+                else b.Incoming = (minX - AvatarZone) <= (r.Width - AvatarZone - maxX);
             }
         }
         lock (sync)
@@ -399,9 +413,6 @@ class WeChatAssist
                     host.Log("wechat input setvalue mismatch");
                     return;
                 }
-                // Tin mình gửi đi sẽ hiện luôn nghĩa tiếng Việt, khỏi phải dịch lại.
-                lock (sync) cache[result.Trim()] = original.Trim();
-                SaveCache();
                 SetStatus(ir, "✓ Đã dịch sang tiếng Trung – kiểm tra rồi bấm Enter để gửi.", false, 4);
                 host.Log("wechat input translated len=" + original.Length + "->" + result.Length);
             }
